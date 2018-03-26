@@ -6,7 +6,7 @@ Created on Apr 16, 2016
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.OnscreenText import OnscreenText
 from direct.task import Task
-from panda3d.core import WindowProperties, TextNode, TransparencyAttrib#, CollideMask, Material, Fog
+from panda3d.core import WindowProperties, TextNode, TransparencyAttrib, Quat, Vec3#, CollideMask, Material, Fog
 import math, Queue, time, random
 
 import universal
@@ -18,13 +18,21 @@ from direct.gui.OnscreenImage import OnscreenImage
 
 NetAddress = ("localhost", 5000)
 
-PlayerBaseSpeed = 10
-UniverseBound = 750 # Remember, this affects respawn
+UniverseBound = 250 # Remember, this affects respawn
 
 FreeFly = False
 
 FullScreen = False
-HDResolution = True
+HDResolution = False #True
+
+
+PLAYER_SPEED_BASE = 10
+PLAYER_SPEED_LIMIT = 40
+
+
+PLAYER_TURN_SPEED_LIMIT = 50
+PLAYER_TURN_SPEED_MANEUVERABILITY_FACTOR = 1.50
+
 
 global globalClock
 global base
@@ -39,13 +47,14 @@ class Universe(ShowBase):
 		self.__finishedEntities = Queue.Queue()
 
 		self.setBackgroundColor(0, 0, 0)
-		
+
 		# Default camera mouse control behavior will be disabled
 		self.disableMouse()
 		wp = WindowProperties()
 		wp.setMouseMode(WindowProperties.M_confined)  # Keep the mouse in the window (OS X & Linux)
 		wp.setCursorHidden(True)
 		if HDResolution: wp.setSize(1920, 1080)
+		else: wp.setSize(1920 / 2, 1080 / 2)
 		if HDResolution: wp.setOrigin(0,0)
 		if FullScreen: wp.setFullscreen(True)
 		wp.setTitle("[Alpha] Starlit")
@@ -53,7 +62,7 @@ class Universe(ShowBase):
 
 		# Preset camera
 		self.camera.setPos(0, 0, 0) #-450, 320, 30)  # (40, -150, 50)
-		
+
 
 		# Generate UI text
 		self.instructions = list()
@@ -69,12 +78,12 @@ class Universe(ShowBase):
 		self.tText = self.genLabelText("", 8)
 		self.hprText = self.genLabelText("", 9)
 		self.xyText = self.genLabelText("", 10)
-		
+
 		self._bound = dict()
 		self._bound["universe"] = radialBound
-		
+
 		self._interface = dict()
-		
+
 		'''
 		self._interface["message-box"] = DirectScrolledList( \
 															borderWidth = (0,0),
@@ -82,16 +91,16 @@ class Universe(ShowBase):
 															frameSize=(-0.56, 0.5, -0.32, 0.1), \
 															pos=(-1.16, 0, -0.62), \
 															numItemsVisible = 5)
-														
+
 		self._interface["message-box"].incButton['frameSize'] = (0, 0, 0, 0)
 		self._interface["message-box"].decButton['frameSize'] = (0, 0, 0, 0)
 		'''
-		
+
 		self._interface["hud"] = dict()
 		self._interface["hud"]["message"] = dict()
 		self._interface["hud"]["message"]["element"] = OnscreenText(text="", pos=(0,0.65,0), fg=(1, 1, 1, 1), align=TextNode.ACenter, scale=.08)
 		self._interface["hud"]["message"]["timeout"] = 0
-		
+
 		self._interface["hud"]["score"] = dict()
 		self._interface["hud"]["score"]["element"] = OnscreenText(text="-", pos=(1.5,-0.88,0), fg=(1, 1, 1, 1), align=TextNode.ACenter, scale=0.2)
 		self._interface["hud"]["score"]["postfix"] = ["st", "nd", "rd", "th"]
@@ -100,8 +109,8 @@ class Universe(ShowBase):
 		self._interface["hud"]["health"]["element"] = OnscreenImage(image = "textures/interface/damage-effect.png", pos = (0,0,0), scale=(1.78, 0, 1))
 		self._interface["hud"]["health"]["element"].setTransparency(TransparencyAttrib.MAlpha)
 		self.setHUDHealth(100)
-				
-		
+
+
 
 		# Shader configuration
 		# render.clearShader()
@@ -175,55 +184,50 @@ class Universe(ShowBase):
 		self.taskMgr.add(self.update, "Main Task")
 
 		self.acceleration = 0
-		
+
 
 
 
 	def unloadModelEntity(self, modelEntity):
 		if not isinstance(modelEntity, universal.Model): return
 		self.__finishedEntities.put(modelEntity)
-		
+
 	#def addMessage(self, message):
 	#	label = DirectLabel(text = message, text_scale=0.08, text_fg = (1,1,1,1), frameColor = (0,0,0,0))
-		
+
 	def setHUDMessage(self, message, color = (1, 0.1, 0, 1), timeout = 3):
 		self._interface["hud"]["message"]["element"].setFg(color)
 		self._interface["hud"]["message"]["element"].setText(message)
 		self._interface["hud"]["message"]["timeout"] = time.time() + timeout
-		
+
 	def setHUDRank(self, score):
 		color = (1,0,1,1) if score <= 3 else (1,1,1,0.5)
 		self._interface["hud"]["score"]["element"].setFg(color)
-			
+
 		postfix = self._interface["hud"]["score"]["postfix"][score-1 if score <= 4 else 3]
-		
+
 		postfix = postfix if score <= 20 else "/"
 		score = str(score) if score <= 20 else ">="
-			
+
 		self._interface["hud"]["score"]["element"].setText(str(score) + postfix)
-		
+
 	def setHUDHealth(self, health):
 		self._interface["hud"]["health"]["element"].setAlphaScale((100-health) / 100.0)
 
-		
+
 	def respawn(self, position = None, message = None):
 		if message: self.setHUDMessage(message, (1,1,1,1))
-		
+
 		while True:
 			respawnPoint = Vector((random.random() * UniverseBound, \
 								random.random() * UniverseBound, \
 								random.random() * UniverseBound))
 			if respawnPoint.magnitude() <= UniverseBound: break
-			
+
 		self.camera.setPos(respawnPoint.component())
 
 	def update(self, task):
 		delta = globalClock.getDt()
-
-		# Prepare camera variables
-		currentRoll = self.camera.getR()
-		currentPitch = self.camera.getP()
-		currentYaw = self.camera.getH()
 
 		# Prepare mouse variables with a limit
 		dxMouse = self.mouse['dx']
@@ -234,76 +238,55 @@ class Universe(ShowBase):
 		if self.acceleration < 0: self.acceleration = 0
 		if self.acceleration > 1: self.acceleration = 1
 
-		# Calculate limits and speed
-		speed = 20 * 2
-		baseSpeed = PlayerBaseSpeed
-		# We need to limit the turning when going fast
-		turnSpeed = 10 * (1.50 - self.acceleration)
-		rollSpeed = 20 * (1.50 - self.acceleration)
+
+		# Limit turning speed depending on speed.
+		# If going fast, decrease maneuverability.
+		playerTurnSpeed = PLAYER_TURN_SPEED_LIMIT * (PLAYER_TURN_SPEED_MANEUVERABILITY_FACTOR - self.acceleration)
+
 
 		# Physically move the camera
-		offset = delta * baseSpeed + delta * speed * self.acceleration
-		if FreeFly: offset = -self.keys["s"] + self.keys["w"]
+		playerDisplacement = delta * PLAYER_SPEED_BASE + delta * PLAYER_SPEED_LIMIT * self.acceleration
+		if FreeFly: playerDisplacement = -self.keys["s"] + self.keys["w"]
 
+		# Move player to the new coordinates.
+		self.camera.setPos(self.camera, 0, playerDisplacement, 0)
+
+		# Change coordinates to the other side of the sphere if passing bounds.
 		cameraPosition = Vector(tuple(self.camera.getPos()))
-		
 		if cameraPosition.magnitude() > self._bound["universe"]:
 			cameraPosition = cameraPosition.scale(-1)
 			self.camera.setPos(cameraPosition.component())
 
-		self.camera.setPos(self.camera, 0, offset, 0)
 
-		horizon = delta * turnSpeed * (self.keys['a'] - self.keys['d'])
-		if FreeFly: horizon = self.keys["a"] - self.keys["d"]
+		playerPossibleDelta = delta * playerTurnSpeed
 
-		# The roll of the camera directly translate from the offset of the mouse
-		# to the camera's roll.
-		roll = currentRoll + rollSpeed * dxMouse
+		# Calculate Horizon, Vertical, & Roll offsets.
+		playerHOffset = playerPossibleDelta * 0.1		 * 10 * (self.keys['a'] - self.keys['d'])
+		playerVOffset = playerPossibleDelta * dyMouse * 10
+		playerROffset = dxMouse * 10
 
-		# The following two lines calculate the unit magnitude of x and y
-		# relative to the vertical axis of the view of the camera.
-		yUnit = math.sin(math.radians(roll + 90))
-		xUnit = math.cos(math.radians(roll + 90))
+		# Create the rotation quaternion.
+		playerPOVRotation = 	Quat()
+		playerPOVRotation.setHpr(Vec3(playerHOffset, playerVOffset, playerROffset))
 
-		# These two lines set the x (yaw) and y (pitch) appropriately,
-		# by factoring the the unit vectors of dyMouse, or the mouse's y axis.
-		# The last value, horizon, is manually moving the camera based on the
-		# horizontal axis relative to the view of the camera. The unit vectors
-		# for horizon must be 90 degrees from the unit vectors of dyMouse, since
-		# horizon is working with the the horizontal axis, not the vertical.
-		# This can be accomplished by offsetting sin and cos by 90 degrees extra
-		# but I decided to invert the unit vectors (ux -> uy, uy -> -ux).
-		pitch = currentPitch + turnSpeed * yUnit * dyMouse + -xUnit * horizon
-		yaw = currentYaw + turnSpeed * xUnit * dyMouse + yUnit * horizon
 
-		# Temporary Fix
-		if pitch > 90:
-			pitch = 90 - (pitch - 90)
-			yaw += 180
-			roll += 180
-		# Temporary Fix
-		if pitch < -90:
-			pitch = -90 - (pitch + 90)
-			yaw += 180
-			roll += 180
+		self.camera.setQuat(self.camera, playerPOVRotation)
 
-		self.camera.setHpr(yaw, pitch, roll)
 
+		(roll, pitch, yaw) = self.camera.getHpr()
 		self.tText.setText(
 			"Throttle: {0:0.2f} | MdX: {1:0.2f}, MdY: {2:0.2f}".format(self.acceleration * 100, dxMouse, dyMouse))
 		self.hprText.setText("Roll: {0:0.2f}, Pitch: {1:0.2f}, Yaw: {2:0.2f}".format(roll, pitch, yaw))
-		self.xyText.setText(
-			"Coordinates: ({0:03.2f}, {1:03.2f}, {2:03.2f})".format(self.camera.getX(), self.camera.getY(),
-			                                                        self.camera.getZ()))
+		self.xyText.setText("Coordinates: ({0:0.2f}, {1:0.2f})".format(self.camera.getX(), self.camera.getY()))
 
 		return Task.cont
 
 	def __hudUpdateTask(self, task):
 		#delta = globalClock.getDt()
-		
+
 		interfaceMessageAlpha = int(self._interface["hud"]["message"]["timeout"] > time.time())
 		self._interface["hud"]["message"]["element"].setAlphaScale(interfaceMessageAlpha)
-		
+
 		return Task.cont
 
 	def __unloadUpdateTask(self, task):

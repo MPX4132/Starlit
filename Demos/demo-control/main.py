@@ -1,10 +1,22 @@
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.OnscreenText import OnscreenText
 from direct.task import Task
-from panda3d.core import WindowProperties, TextNode
+from panda3d.core import WindowProperties, TextNode, Quat, Vec3
 
 from quaternion import Quaternion, Vector3D
 import math
+
+
+
+
+PLAYER_SPEED_BASE = 0
+PLAYER_SPEED_LIMIT = 80
+
+
+PLAYER_TURN_SPEED_LIMIT = 40
+PLAYER_TURN_SPEED_MANEUVERABILITY_FACTOR = 1.50
+
+
 
 
 class Universe(ShowBase):
@@ -35,27 +47,40 @@ class Universe(ShowBase):
 		self.ground.setScale(1, 1, 1)
 		self.ground.setPos(0, 0, 0)
 
-		# Setup Keyboard
-		self.keys = {}
+		# Register & setup key event handler.
+		self.keys = {} # dict
+
 		for key in ['a', 'd', 'w', 's']:
+			# Make key state for each key, starting as deactivated (0)
 			self.keys[key] = 0
+
+			# Register method self.push_key for key down event handling.
+			# On event, pass key identifier, & a state of 1 to handler.
 			self.accept(key, self.push_key, [key, 1])
+
 			# self.accept('shift-%s' % key, self.push_key, [key, 1])
+
+			# Register method self.push_key for key up event handling.
+			# On event, pass key identifier, & a state of 1 to handler.
 			self.accept('%s-up' % key, self.push_key, [key, 0])
 
+
+		# Register the escape key as the exit key.
 		self.accept('escape', __import__('sys').exit, [0])
 
 		# Setup Mouse
 		self.mouse = {'x': None, 'y': None, 'dx': 0, 'dy': 0}
 
-		# Default camera mouse control behavior will be disabled
+		# Disable default camera mouse control.
 		self.disableMouse()
+
 		wp = WindowProperties()
-		wp.setMouseMode(WindowProperties.M_relative)
+		wp.setMouseMode(WindowProperties.M_confined)  # Keep the mouse in the window (OS X & Linux)
 		wp.setCursorHidden(True)
+
 		wp.setSize(1080, 720)
 		# wp.setFullscreen(True)
-		wp.setTitle("Starlit - Alpha")
+		wp.setTitle("[DEMO] Controls")
 		self.win.requestProperties(wp)
 
 		# Preset values
@@ -76,11 +101,6 @@ class Universe(ShowBase):
 	def update(self, task):
 		delta = globalClock.getDt()
 
-		# Prepare camera variables
-		currentRoll = self.camera.getR()
-		currentPitch = self.camera.getP()
-		currentYaw = self.camera.getH()
-
 		# Prepare mouse variables with a limit
 		dxMouse = self.mouse['dx']
 		dyMouse = -self.mouse['dy']
@@ -90,51 +110,34 @@ class Universe(ShowBase):
 		if self.acceleration < 0: self.acceleration = 0
 		if self.acceleration > 1: self.acceleration = 1
 
-		# Calculate limits and speed
-		speed = 20 * 2
-		baseSpeed = 0
-		# We need to limit the turning when going fast
-		turnSpeed = 10 * (1.50 - self.acceleration)
+
+		# Limit turning speed depending on speed.
+		# If going fast, decrease maneuverability.
+		playerTurnSpeed = PLAYER_TURN_SPEED_LIMIT * (PLAYER_TURN_SPEED_MANEUVERABILITY_FACTOR - self.acceleration)
+
 
 		# Physically move the camera
-		offset = delta * baseSpeed + delta * speed * self.acceleration
-		self.camera.setPos(self.camera, 0, offset, 0)
+		playerDisplacement = delta * PLAYER_SPEED_BASE + delta * PLAYER_SPEED_LIMIT * self.acceleration
+		self.camera.setPos(self.camera, 0, playerDisplacement, 0)
 
-		horizon = delta * turnSpeed * (self.keys['a'] - self.keys['d'])
 
-		# The roll of the camera directly translate from the offset of the mouse
-		# to the camera's roll.
-		roll = currentRoll + turnSpeed * dxMouse
+		playerPossibleDelta = delta * playerTurnSpeed
 
-		# The following two lines calculate the unit magnitude of x and y
-		# relative to the vertical axis of the view of the camera.
-		yUnit = math.sin(math.radians(roll + 90))
-		xUnit = math.cos(math.radians(roll + 90))
+		# Calculate Horizon, Vertical, & Roll offsets.
+		playerHOffset = playerPossibleDelta * 0.1		 * 10 * (self.keys['a'] - self.keys['d'])
+		playerVOffset = playerPossibleDelta * dyMouse * 10
+		playerROffset = dxMouse * 10
 
-		# These two lines set the x (yaw) and y (pitch) appropriately,
-		# by factoring the the unit vectors of dyMouse, or the mouse's y axis.
-		# The last value, horizon, is manually moving the camera based on the
-		# horizontal axis relative to the view of the camera. The unit vectors
-		# for horizon must be 90 degrees from the unit vectors of dyMouse, since
-		# horizon is working with the the horizontal axis, not the vertical.
-		# This can be accomplished by offsetting sin and cos by 90 degrees extra
-		# but I decided to invert the unit vectors (ux -> uy, uy -> -ux).
-		pitch = currentPitch + turnSpeed * yUnit * dyMouse + -xUnit * horizon
-		yaw = currentYaw + turnSpeed * xUnit * dyMouse + yUnit * horizon
 
-		# Temporary Fix
-		if pitch > 90:
-			pitch = 90 - (pitch - 90)
-			yaw += 180
-			roll += 180
-		# Temporary Fix
-		if pitch < -90:
-			pitch = -90 - (pitch + 90)
-			yaw += 180
-			roll += 180
 
-		self.camera.setHpr(yaw, pitch, roll)
+		playerPOVRotation = 	Quat()
+		playerPOVRotation.setHpr(Vec3(playerHOffset, playerVOffset, playerROffset))
 
+
+		self.camera.setQuat(self.camera, playerPOVRotation)
+
+
+		(roll, pitch, yaw) = self.camera.getHpr()
 		self.tText.setText(
 			"Throttle: {0:0.2f} | MdX: {1:0.2f}, MdY: {2:0.2f}".format(self.acceleration * 100, dxMouse, dyMouse))
 		self.hprText.setText("Roll: {0:0.2f}, Pitch: {1:0.2f}, Yaw: {2:0.2f}".format(roll, pitch, yaw))
@@ -146,16 +149,24 @@ class Universe(ShowBase):
 		mw = self.mouseWatcherNode
 
 		# Get the new coordinates
-		x = mw.getMouseX() if mw.hasMouse() else 0
-		y = mw.getMouseY() if mw.hasMouse() else 0
+		#x = mw.getMouseX() if mw.hasMouse() else 0
+		#y = mw.getMouseY() if mw.hasMouse() else 0
 
 		# Calculate the difference between old and new coordinates.
-		self.mouse['dx'] = x - self.mouse['x'] if self.mouse['x'] is not None else 0
-		self.mouse['dy'] = y - self.mouse['y'] if self.mouse['y'] is not None else 0
+		#self.mouse['dx'] = x - self.mouse['x'] if self.mouse['x'] is not None else 0
+		#self.mouse['dy'] = y - self.mouse['y'] if self.mouse['y'] is not None else 0
+
+		# Get the new coordinates; that's the offset
+		self.mouse['dx'] = mw.getMouseX() if mw.hasMouse() else 0
+		self.mouse['dy'] = mw.getMouseY() if mw.hasMouse() else 0
 
 		# Update the  old coordinates to the new ones.
-		self.mouse['x'] = x
-		self.mouse['y'] = y
+		#self.mouse['x'] = x
+		#self.mouse['y'] = y
+
+
+		base.win.movePointer(0, int(base.win.getXSize() / 2), int(base.win.getYSize() / 2))
+
 		return Task.cont
 
 	def genLabelText(self, text, i):

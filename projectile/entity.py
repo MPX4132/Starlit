@@ -14,7 +14,7 @@ class Entity(Model):
 	'''
 	DefaultTypeID = 0
 	DefaultDamage = 10
-	DefaultSpeed = 100
+	DefaultSpeed = 250
 	DefaultPosition = (0, 0, 0)
 	DefaultDirection = (0, 0, 0)
 	DefaultDistance = 1000
