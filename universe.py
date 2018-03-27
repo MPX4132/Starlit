@@ -221,7 +221,7 @@ class Universe(ShowBase):
 		while True:
 			respawnPoint = Vector((random.random() * UniverseBound, \
 								random.random() * UniverseBound, \
-								random.random() * UniverseBound))
+								random.random() * UniverseBound)) if not FreeFly else Vector((0,0,0))
 			if respawnPoint.magnitude() <= UniverseBound: break
 
 		self.camera.setPos(respawnPoint.component())
@@ -273,7 +273,7 @@ class Universe(ShowBase):
 		self.camera.setQuat(self.camera, playerPOVRotation)
 
 
-		(roll, pitch, yaw) = self.camera.getHpr()
+		(yaw, pitch, roll) = self.camera.getHpr()
 		self.tText.setText(
 			"Throttle: {0:0.2f} | MdX: {1:0.2f}, MdY: {2:0.2f}".format(self.acceleration * 100, dxMouse, dyMouse))
 		self.hprText.setText("Roll: {0:0.2f}, Pitch: {1:0.2f}, Yaw: {2:0.2f}".format(roll, pitch, yaw))
